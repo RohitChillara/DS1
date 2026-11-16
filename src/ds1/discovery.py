@@ -59,7 +59,7 @@ async def announce(transport,node_id,log,port):
         await asyncio.sleep(2)
 
 
-async def handler(protocol,node_id,port,log,send_transport= None):
+async def handler(protocol,node_id,port,log):
     while True:
         message,addr = await protocol.queue.get()
         message = message.split(" ")
@@ -69,13 +69,10 @@ async def handler(protocol,node_id,port,log,send_transport= None):
             try:
                 if message[0] == "HELLO" and int(message[1])!=node_id:
                     log.info(f"HELLO recieved from {message[1]}")
-                    if send_transport is None:
-                        protocol.transport.sendto(f"HELLO_ACK {node_id}".encode(),(addr[0],port+int(message[1])))
-                    else:
-                         send_transport.sendto(f"HELLO_ACK {node_id}".encode(),(addr[0],port+int(message[1])))
+                    protocol.transport.sendto(f"HELLO_ACK {node_id}".encode(),addr)
                     if message[1] not in member_list:
-                                            member_list[message[1]] = (addr[0],port+int(message[1]))
-                                            log.info(f"HELLO received from {message[1]} and added to the active member list")
+                        member_list[message[1]] = (addr[0],port+int(message[1]))
+                        log.info(f"HELLO received from {message[1]} and added to the active member list")
                 elif message[0] == "HELLO_ACK" and int(message[1])!=node_id: 
                      log.info(f"ACK received from node: {message[1]}")
             except ValueError:
@@ -84,12 +81,9 @@ async def handler(protocol,node_id,port,log,send_transport= None):
 
 async def main(node_id,log,port):
     loop = asyncio.get_running_loop()
-    personal_port = port+node_id
     sock = create_socket(port,log)
-    personal_sock = create_socket(personal_port,log)
     transport, protocol = await loop.create_datagram_endpoint(lambda:DiscoveryProtocol(log),sock=sock)
-    transport2, protocol2 = await loop.create_datagram_endpoint(lambda:DiscoveryProtocol(log),sock=personal_sock)
-    await asyncio.gather(announce(transport,node_id,log,port), handler(protocol,node_id,port,log,transport2), handler(protocol2,node_id,personal_port,log))
+    await asyncio.gather(announce(transport,node_id,log,port), handler(protocol,node_id,port,log))
 
 
 if __name__=='__main__':
