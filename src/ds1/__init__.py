@@ -1,2 +1,6 @@
+from ds1 import server
+import uvicorn
+
 def main() -> None:
-    print("Hello from ds1!")
+    app = server.app
+    uvicorn.run(app=app)
