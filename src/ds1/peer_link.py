@@ -7,6 +7,7 @@ from functools import partial
 from pydantic import BaseModel, ValidationError
 from dataclasses import dataclass,field
 import time
+import socket
 
 @dataclass
 class NodeState:
@@ -86,10 +87,10 @@ async def watch_peers(log):
                 state.last_seen.pop(dead_nodes)
         await asyncio.sleep(0.5)
 
-async def main(log,peer_port):
-    server = await asyncio.start_server(partial(handler,log),host='0.0.0.0',port=6000+state.node_id)
+async def main(log):
+    server = await asyncio.start_server(partial(handler,log),host='192.168.10.2',port=8000)
 
-    tasks = [heartbeats(('127.0.0.1',peer_port),log)]
+    tasks = [heartbeats(('192.168.10.3',8000),log)]
 
     try:
         await asyncio.gather(*tasks,watch_peers(log))
