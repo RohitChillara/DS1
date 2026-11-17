@@ -1,32 +1,15 @@
 from __future__ import annotations
-from typing import Literal
 import asyncio
-import logging
-import argparse 
 from functools import partial
-from pydantic import BaseModel, ValidationError
-from dataclasses import dataclass,field
 import time
-import socket
+from ds1 import messages as m, state as s
+from ds1.config import TCP_PORT
 
-@dataclass
-class NodeState:
-    node_id: int
-    leader : int | None
-    term: int = 0
-    last_seen:dict[int,float] = field(default_factory=dict)
+STALL_LIMIT = 2.0
+DEAD_AFTER = 3.0
+CHECK_EVERY = 0.5
 
-class Message(BaseModel):
-    type: Literal["HEARTBEAT","ELECTION","COORDINATOR","OK"]
-    sender: int
-    term: int
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s.%(msecs)03d %(levelname)-7s [node %(node_id)s] %(message)s",
-    datefmt="%H:%M:%S",
-)
-base_logger = logging.getLogger(__name__)
+_outbound: dict[int, asyncio.StreamWriter] = {}
 
 async def handler(log,reader,writer):
     addr = writer.get_extra_info("peername")
@@ -38,80 +21,66 @@ async def handler(log,reader,writer):
             log.warning(f"{addr}-connection closed")
             return
         try:
-            m = Message.model_validate_json(line)
-            if m.type == "HEARTBEAT":
-                log.info(f"Heartbeat received from {m.sender}")
-                state.last_seen[m.sender] = time.monotonic()
+            msg = m.decode(line)
+            if msg.type == "HEARTBEAT":
+                log.debug(f"Heartbeat received from {msg.sender}")
+                s.Heartbeats.last_beat[msg.sender] = time.monotonic()
                 continue
-        except ValidationError as e:
+        except Exception as e:
             log.error(f"Malformed data sent by {addr}, Error: {e}")
             continue
 
-
-async def heartbeats(addr,log):
-    host , port = addr
+async def heartbeats(peer_id: int, log):
     while True:
         writer = None
         try:
-            reader , writer = await asyncio.open_connection(host,port)
-            while True:
-                msg = Message(type="HEARTBEAT",sender=state.node_id,term=state.term)
-                m = msg.model_dump_json() + '\n'
-                writer.write(m.encode())
-                log.info(f"Hearbeat from {state.node_id} is sent")
+            host = s.Members.members[peer_id]
+            reader, writer = await asyncio.open_connection(host, TCP_PORT)
+            _outbound[peer_id] = writer
+            log.info(f"Outbound link to {peer_id} established")
+            while not writer.is_closing():
+                msg = m.Message(type="HEARTBEAT", sender=s.MyDetails.node_id,
+                                term=s.Members.term, leader=s.Members.leader)
+                writer.write(m.encode(msg))
                 await writer.drain()
+                log.debug(f"Heartbeat sent to {peer_id}")
                 await asyncio.sleep(1)
-        except (ConnectionRefusedError, ConnectionResetError, BrokenPipeError) as cre:
-            log.error(f"Connection to {addr} lost, retrying in 2s")
-            await asyncio.sleep(2) 
+            log.info(f"Outbound link to {peer_id} closed by watcher")
         except OSError as e:
-            log.error(f"Cannot reach {addr}: {e.__class__.__name__}, retrying in 2s")
-            await asyncio.sleep(2)  
-
+            log.warning(f"Cannot reach {peer_id}: {e.__class__.__name__}")
         finally:
+            if _outbound.get(peer_id) is writer:
+                _outbound.pop(peer_id)
             if writer is not None:
                 writer.close()
                 try:
                     await writer.wait_closed()
-                except (ConnectionResetError, BrokenPipeError):
+                except OSError:
                     pass
+        await asyncio.sleep(2)
 
 async def watch_peers(log):
+    last_tick = time.monotonic()
     while True:
-        dead = []
-        for nodes in state.last_seen:
-            if time.monotonic() - state.last_seen[nodes] <= 3:
-                continue
-            else:
-                dead.append(nodes)
-                log.warning(f"{nodes} stopped responding for {time.monotonic()-state.last_seen[nodes]} and is presumed dead.")
-        if dead:
-            for dead_nodes in dead:
-                state.last_seen.pop(dead_nodes)
-        await asyncio.sleep(0.5)
+        now = time.monotonic()
+        if now - last_tick > STALL_LIMIT:
+            log.warning(f"Local stall of {now - last_tick:.1f}s, resetting peer timers")
+            for p in s.Heartbeats.last_beat:
+                s.Heartbeats.last_beat[p] = now
+        last_tick = now
+        dead = [p for p, t in s.Heartbeats.last_beat.items() if now - t > DEAD_AFTER]
+        for p in dead:
+            log.warning(f"{p} silent for {now - s.Heartbeats.last_beat[p]:.1f}s, presumed dead")
+            s.Heartbeats.last_beat.pop(p)
+            writer = _outbound.pop(p, None)
+            if writer is not None:
+                writer.close()
+        await asyncio.sleep(CHECK_EVERY)
 
-async def main(log):
-    server = await asyncio.start_server(partial(handler,log),host='192.168.10.2',port=8000)
-
-    tasks = [heartbeats(('192.168.10.3',8000),log)]
-
+async def peer_link(log):
+    server = await asyncio.start_server(partial(handler,log),host='0.0.0.0',port=TCP_PORT)
     try:
-        await asyncio.gather(*tasks,watch_peers(log))
+        await watch_peers(log)
     finally:
         server.close()
-        server.close_clients()
         await server.wait_closed()
-
-
-if __name__=='__main__':
-    parser = argparse.ArgumentParser()
-    parser.add_argument("node_id",type=int)
-    args = parser.parse_args()
-    log = logging.LoggerAdapter(base_logger,{"node_id":args.node_id})
-    state = NodeState(node_id=args.node_id, leader=None)
-    asyncio.run(main(log))
-
-
-
-    
-    
