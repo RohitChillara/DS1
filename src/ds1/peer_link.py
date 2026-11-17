@@ -49,7 +49,7 @@ async def heartbeats(peer_id: int, log):
         except OSError as e:
             log.warning(f"Cannot reach {peer_id}: {e.__class__.__name__}")
         finally:
-            if _outbound.get(peer_id) is writer:
+            if writer is not None and _outbound.get(peer_id) is writer:
                 _outbound.pop(peer_id)
             if writer is not None:
                 writer.close()

@@ -52,15 +52,19 @@ async def handler(protocol, log):
         except ValidationError:
             log.warning(f"Malformed packet from {addr}")
             continue
-        if msg.sender == s.MyDetails.node_id:
+
+        if msg.sender == s.MyDetails.node_id or msg.type not in ("HELLO", "HELLO_ACK"):
             continue
-        if msg.type not in ("HELLO", "HELLO_ACK"):
-            continue
-        if msg.sender not in s.Members.members:
+
+        is_new = msg.sender not in s.Members.members
+        is_alive = msg.sender in s.Heartbeats.last_beat
+
+        if is_new:
             s.Members.members[msg.sender] = addr[0]
             asyncio.create_task(peer_link.heartbeats(msg.sender, log))
             log.info(f"Discovered node {msg.sender} at {addr[0]}")
-        if msg.type == "HELLO":
+
+        if msg.type == "HELLO" and not is_alive:       # silent for nodes already heartbeating
             ack = m.Message(type="HELLO_ACK", sender=s.MyDetails.node_id,
                             term=s.Members.term, leader=s.Members.leader)
             protocol.transport.sendto(m.encode(ack), addr)
