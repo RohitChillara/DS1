@@ -63,7 +63,10 @@ async def heartbeats(addr,log):
                 await asyncio.sleep(1)
         except (ConnectionRefusedError, ConnectionResetError, BrokenPipeError) as cre:
             log.error(f"Connection to {addr} lost, retrying in 2s")
-            await asyncio.sleep(2)   
+            await asyncio.sleep(2) 
+        except OSError as e:
+            log.error(f"Cannot reach {addr}: {e.__class__.__name__}, retrying in 2s")
+            await asyncio.sleep(2)  
 
         finally:
             if writer is not None:
