@@ -71,10 +71,11 @@ async def handler(protocol,node_id,port,log):
                     log.info(f"HELLO recieved from {message[1]}")
                     protocol.transport.sendto(f"HELLO_ACK {node_id}".encode(),addr)
                     if message[1] not in member_list:
-                        member_list[message[1]] = (addr[0],port+int(message[1]))
+                        member_list[message[1]] = addr
                         log.info(f"HELLO received from {message[1]} and added to the active member list")
                 elif message[0] == "HELLO_ACK" and int(message[1])!=node_id: 
                      log.info(f"ACK received from node: {message[1]}")
+                     print(member_list)
             except ValueError:
                 log.warning(f"Missing node_id received from {addr}")
             

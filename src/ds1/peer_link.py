@@ -103,11 +103,10 @@ async def main(log):
 if __name__=='__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("node_id",type=int)
-    parser.add_argument("--peerport",type=int)
     args = parser.parse_args()
     log = logging.LoggerAdapter(base_logger,{"node_id":args.node_id})
     state = NodeState(node_id=args.node_id, leader=None)
-    asyncio.run(main(log,args.peerport))
+    asyncio.run(main(log))
 
 
 
