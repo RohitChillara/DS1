@@ -9,6 +9,7 @@ class Members:
 @dataclass(frozen=True)
 class MyDetails:
     node_id: int
+    start_time: float
 
 @dataclass
 class Heartbeats:

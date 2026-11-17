@@ -1,5 +1,6 @@
-import argparse, asyncio, logging
+import argparse, asyncio, logging, time
 from ds1 import state as s, discovery, peer_link
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s.%(msecs)03d %(levelname)-7s [node %(node_id)s] %(message)s",
@@ -16,6 +17,7 @@ if __name__ == "__main__":
     p.add_argument("node_id", type=int)
     a = p.parse_args()
     s.MyDetails.node_id = a.node_id
+    s.MyDetails.start_time = time.monotonic()
     s.Members.leader = None
     s.Members.members = {}
     s.Members.term = 0

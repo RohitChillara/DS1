@@ -4,7 +4,7 @@ import asyncio
 from ds1 import messages as m,state as s
 from ds1.config import UDP_PORT
 from pydantic import ValidationError
-from ds1 import peer_link
+from ds1 import monitor
 
 def create_socket(port,log):
     sock = socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
@@ -61,13 +61,15 @@ async def handler(protocol, log):
 
         if is_new:
             s.Members.members[msg.sender] = addr[0]
-            asyncio.create_task(peer_link.heartbeats(msg.sender, log))
+            asyncio.create_task(monitor.heartbeats(msg.sender, log))
             log.info(f"Discovered node {msg.sender} at {addr[0]}")
 
-        if msg.type == "HELLO" and not is_alive:       # silent for nodes already heartbeating
+        if msg.type == "HELLO" and not is_alive:
             ack = m.Message(type="HELLO_ACK", sender=s.MyDetails.node_id,
                             term=s.Members.term, leader=s.Members.leader)
             protocol.transport.sendto(m.encode(ack), addr)
+            log.info(f"HELLO_ACK sent to {msg.sender}")
+
 
 async def discovery(log):
     loop = asyncio.get_running_loop()
