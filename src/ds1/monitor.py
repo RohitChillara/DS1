@@ -14,8 +14,7 @@ CHECK_EVERY = 0.5
 async def heartbeats(peer_id: int, log):
     """One task per peer, started by discovery. Sender handles (re)connecting."""
     while True:
-        msg = m.Message(type="HEARTBEAT", sender=s.MyDetails.node_id,
-                        term=s.Members.term, leader=s.Members.leader)
+        msg = m.Message(type="HEARTBEAT", sender=s.MyDetails.node_id, leader=s.Members.leader)
         await p.sender(peer_id, msg, log)
         await asyncio.sleep(BEAT_EVERY)
 

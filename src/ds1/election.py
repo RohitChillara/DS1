@@ -36,8 +36,7 @@ def _spawn(coro, log) -> asyncio.Task:
 
 def _msg(kind: Literal["ELECTION", "COORDINATOR", "OK"]) -> m.Message:
     """Every message carries the current term and leader. The term is raised in _claim, not here."""
-    return m.Message(type=kind, sender=s.MyDetails.node_id,
-                     term=s.Members.term, leader=s.Members.leader)
+    return m.Message(type=kind, sender=s.MyDetails.node_id, leader=s.Members.leader)
 
 
 def _send(peer_id: int, msg: m.Message, log):
@@ -73,7 +72,7 @@ def _claim(log):
     """Become leader. No await in here, so nothing can interrupt it halfway."""
     s.Members.leader = s.MyDetails.node_id
     _broadcast("COORDINATOR", _peers(), log)
-    log.info(f"Leader claimed by {s.MyDetails.node_id}, term {s.Members.term}")
+    log.info(f"Leader claimed by {s.MyDetails.node_id}")
 
 
 # ---------- the election ----------

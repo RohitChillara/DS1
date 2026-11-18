@@ -38,8 +38,7 @@ class DiscoveryProtocol(asyncio.DatagramProtocol):
 
 async def announce(transport, log):
     while True:
-        hello = m.Message(type="HELLO", sender=s.MyDetails.node_id,
-                          term=s.Members.term, leader=s.Members.leader)
+        hello = m.Message(type="HELLO", sender=s.MyDetails.node_id, leader=s.Members.leader)
         transport.sendto(m.encode(hello), ("255.255.255.255", UDP_PORT))
         log.debug("HELLO broadcast")
         await asyncio.sleep(2)
@@ -65,8 +64,7 @@ async def handler(protocol, log):
             log.info(f"Discovered node {msg.sender} at {addr[0]}")
 
         if msg.type == "HELLO" and not is_alive:
-            ack = m.Message(type="HELLO_ACK", sender=s.MyDetails.node_id,
-                            term=s.Members.term, leader=s.Members.leader)
+            ack = m.Message(type="HELLO_ACK", sender=s.MyDetails.node_id, leader=s.Members.leader)
             protocol.transport.sendto(m.encode(ack), addr)
             log.info(f"HELLO_ACK sent to {msg.sender}")
 
