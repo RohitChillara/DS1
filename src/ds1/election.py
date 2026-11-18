@@ -81,7 +81,10 @@ def _claim(log):
 def trigger_election(log):
     """The only way to start an election: from the watcher, on_election, or a retry."""
     if not election_running:
-        _spawn(start_election(log), log)
+        if s.Members.leader == s.MyDetails.node_id:
+            pass
+        else:         
+            _spawn(start_election(log), log)
 
 
 async def start_election(log):
@@ -127,6 +130,10 @@ def on_election(msg: m.Message, log):
     if msg.sender < s.MyDetails.node_id:
         _send(msg.sender, _msg("OK"), log)        # back off, I'm higher
         trigger_election(log)
+    if s.Members.leader == s.MyDetails.node_id:
+        _send(msg.sender, _msg("OK"), log)
+        _send(msg.sender, _msg("COORDINATOR"), log)
+        return
 
 
 def on_ok(msg: m.Message, log):
@@ -139,8 +146,10 @@ def on_coordinator(msg: m.Message, log):
     if msg.term < s.Members.term:
         return                                    # stale: ignore, no reply
     if (msg.term == s.Members.term and s.Members.leader is not None
-            and s.Members.leader >= msg.sender):
-        return                                    # same term, already following an equal or higher leader
+        and s.Members.leader >= msg.sender):
+        if s.Members.leader == msg.sender:
+            coordinator_flag.set()        # confirmation from my current leader: stop waiting
+        return                                   # same term, already following an equal or higher leader
     old = s.Members.leader
     s.Members.leader = msg.sender                 # accept silently, never refuse
     s.Members.term = msg.term
