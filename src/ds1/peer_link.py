@@ -25,7 +25,7 @@ async def handler(log, reader, writer):
                 log.error(f"Malformed data from {addr}: {e}")
                 continue
 
-            if (msg.leader is not None and msg.leader < s.MyDetails.node_id 
+            if (msg.leader is not None and msg.leader < s.MyDetails.node_id
             and msg.type == "HEARTBEAT" and not election.election_running):
                 election.trigger_election(log)
             if msg.type == "HEARTBEAT":
@@ -42,7 +42,10 @@ async def handler(log, reader, writer):
         log.warning(f"Inbound link {addr} error: {e.__class__.__name__}")
     finally:
         writer.close()
-        await writer.wait_closed()
+        try:
+            await writer.wait_closed()
+        except OSError:
+            pass                                 # already broken: nothing left to close
 
 
 async def sender(peer_id: int, message: m.Message, log) -> bool:
@@ -74,7 +77,10 @@ async def sender(peer_id: int, message: m.Message, log) -> bool:
             log.debug(f"{message.type} to {peer_id} failed: {e.__class__.__name__}")
             _outbound.pop(peer_id, None)
             writer.close()
-            await writer.wait_closed()
+            try:
+                await writer.wait_closed()
+            except OSError:
+                pass                             # already broken: nothing left to close
             return False
 
 

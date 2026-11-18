@@ -14,4 +14,3 @@ async def save_photo(photo):
     with open(JSON_DIR/"metadata.json","r") as f:
         images_metadata = f.read()
     images_metadata[last_position] = photo
-    with open(JSON_DIR/"metadata.json","w")
