@@ -25,19 +25,15 @@ async def handler(log, reader, writer):
                 log.error(f"Malformed data from {addr}: {e}")
                 continue
 
-            # term rule for every message; COORDINATOR is decided by on_coordinator
-            if msg.term > s.Members.term and msg.type != "COORDINATOR":
-                log.info(f"Saw term {msg.term} from {msg.sender}, adopting leader {msg.leader}")
-                s.Members.term = msg.term
-                if msg.leader is not None:       # FIX: never adopt "no leader", it leaves the node stuck
-                    s.Members.leader = msg.leader
-
+            if (msg.leader is not None and msg.leader < s.MyDetails.node_id 
+            and msg.type == "HEARTBEAT" and not election.election_running):
+                election.trigger_election(log)
             if msg.type == "HEARTBEAT":
                 s.Heartbeats.last_beat[msg.sender] = time.monotonic()
             elif msg.type == "ELECTION":
                 election.on_election(msg, log)
             elif msg.type == "OK":
-                election.on_ok(msg, log)
+                election.on_ok()
             elif msg.type == "COORDINATOR":
                 election.on_coordinator(msg, log)
             else:
@@ -46,6 +42,7 @@ async def handler(log, reader, writer):
         log.warning(f"Inbound link {addr} error: {e.__class__.__name__}")
     finally:
         writer.close()
+        await writer.wait_closed()
 
 
 async def sender(peer_id: int, message: m.Message, log) -> bool:
@@ -77,6 +74,7 @@ async def sender(peer_id: int, message: m.Message, log) -> bool:
             log.debug(f"{message.type} to {peer_id} failed: {e.__class__.__name__}")
             _outbound.pop(peer_id, None)
             writer.close()
+            await writer.wait_closed()
             return False
 
 

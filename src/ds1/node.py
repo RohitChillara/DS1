@@ -10,8 +10,7 @@ logger = logging.getLogger("ds1")   # no LoggerAdapter needed
 
 async def elect(log):
     await asyncio.sleep(5)
-    if s.Members.leader == None:
-        election.trigger_election(log)
+    election.trigger_election(log)
     
 
 async def main(log):
@@ -26,7 +25,6 @@ if __name__ == "__main__":
     s.MyDetails.start_time = time.monotonic()
     s.Members.leader = None
     s.Members.members = {}
-    s.Members.term = 0
     s.Heartbeats.last_beat = {}
     log = logging.LoggerAdapter(logger, {"node_id": a.node_id})
     try: 

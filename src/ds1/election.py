@@ -6,6 +6,7 @@ from typing import Literal
 from ds1 import messages as m
 from ds1 import peer_link as p
 from ds1 import state as s
+import time
 
 OK_TIMEOUT = 2.0            # wait 1: OK (or COORDINATOR) from a higher node
 COORDINATOR_TIMEOUT = 5.0   # wait 2: after an OK, the winner must announce (> OK_TIMEOUT)
@@ -70,7 +71,6 @@ async def _wait_for_ok_or_coordinator(timeout: float):
 
 def _claim(log):
     """Become leader. No await in here, so nothing can interrupt it halfway."""
-    s.Members.term += 1
     s.Members.leader = s.MyDetails.node_id
     _broadcast("COORDINATOR", _peers(), log)
     log.info(f"Leader claimed by {s.MyDetails.node_id}, term {s.Members.term}")
@@ -80,10 +80,7 @@ def _claim(log):
 
 def trigger_election(log):
     """The only way to start an election: from the watcher, on_election, or a retry."""
-    if not election_running:
-        if s.Members.leader == s.MyDetails.node_id:
-            pass
-        else:         
+    if not election_running:        
             _spawn(start_election(log), log)
 
 
@@ -110,7 +107,7 @@ async def start_election(log):
             if ok_flag.is_set():
                 try:
                     await asyncio.wait_for(coordinator_flag.wait(), timeout=COORDINATOR_TIMEOUT)
-                    log.info(f"Following leader {s.Members.leader}, term {s.Members.term}")
+                    log.info(f"Following leader {s.Members.leader}")
                 except asyncio.TimeoutError:
                     log.warning("Got OK but no COORDINATOR followed, restarting election")
                     retry = True
@@ -130,28 +127,19 @@ def on_election(msg: m.Message, log):
     if msg.sender < s.MyDetails.node_id:
         _send(msg.sender, _msg("OK"), log)        # back off, I'm higher
         trigger_election(log)
-    if s.Members.leader == s.MyDetails.node_id:
-        _send(msg.sender, _msg("OK"), log)
-        _send(msg.sender, _msg("COORDINATOR"), log)
-        return
 
 
-def on_ok(msg: m.Message, log):
-    if msg.term < s.Members.term or msg.sender < s.MyDetails.node_id:
-        return                                    # stale, or from a lower node: meaningless
+def on_ok():
     ok_flag.set()
 
 
 def on_coordinator(msg: m.Message, log):
-    if msg.term < s.Members.term:
-        return                                    # stale: ignore, no reply
-    if (msg.term == s.Members.term and s.Members.leader is not None
-        and s.Members.leader >= msg.sender):
-        if s.Members.leader == msg.sender:
-            coordinator_flag.set()        # confirmation from my current leader: stop waiting
-        return                                   # same term, already following an equal or higher leader
-    old = s.Members.leader
-    s.Members.leader = msg.sender                 # accept silently, never refuse
-    s.Members.term = msg.term
-    coordinator_flag.set()
-    log.info(f"Leader changed from {old} to {msg.sender}, term {msg.term}")
+    if msg.sender > s.MyDetails.node_id:                
+        old = s.Members.leader
+        s.Members.leader = msg.sender
+        coordinator_flag.set()
+        s.Heartbeats.last_beat[msg.sender] = time.monotonic()
+        log.info(f"Leader changed from {old} to {msg.sender}")
+    else:
+        trigger_election(log)
+        log.info(f"Coordinator request refused for {msg.sender}")
