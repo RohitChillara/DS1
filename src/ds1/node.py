@@ -1,5 +1,5 @@
 import argparse, asyncio, logging, time
-from ds1 import state as s, discovery, peer_link
+from ds1 import state as s, discovery, peer_link, election, monitor
 
 logging.basicConfig(
     level=logging.INFO,
@@ -8,8 +8,14 @@ logging.basicConfig(
 )
 logger = logging.getLogger("ds1")   # no LoggerAdapter needed
 
+async def elect(log):
+    await asyncio.sleep(5)
+    if s.Members.leader == None:
+        election.trigger_election(log)
+    
+
 async def main(log):
-    await asyncio.gather(peer_link.peer_link(log), discovery.discovery(log))
+    await asyncio.gather(peer_link.peer_link(log), discovery.discovery(log),monitor.watch_peers(log),elect(log))
 
 
 if __name__ == "__main__":

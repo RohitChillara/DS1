@@ -2,14 +2,13 @@ from __future__ import annotations
 import asyncio
 import time
 from ds1 import messages as m, state as s
-from ds1 import peer_link as p
+from ds1 import peer_link as p, election as el
 
 BEAT_EVERY = 1.0      # seconds between heartbeats
 DEAD_AFTER = 3.0      # seconds without a heartbeat before a peer is presumed dead
 STALL_LIMIT = 2.0     # gap between watcher runs that means *we* were frozen
 CHECK_EVERY = 0.5
 
-on_leader_dead = None   # set by node.py, e.g. election.trigger
 
 
 async def heartbeats(peer_id: int, log):
@@ -45,7 +44,11 @@ async def watch_peers(log):
                 writer.close()
             if peer == s.Members.leader:
                 s.Members.leader = None
-                if on_leader_dead is not None:
-                    on_leader_dead()
+                el.trigger_election(log)
 
         await asyncio.sleep(CHECK_EVERY)
+
+
+
+async def monitor(log):
+    asyncio.create_task(watch_peers(log))

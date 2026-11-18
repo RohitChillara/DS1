@@ -29,7 +29,8 @@ async def handler(log, reader, writer):
             if msg.term > s.Members.term and msg.type != "COORDINATOR":
                 log.info(f"Saw term {msg.term} from {msg.sender}, adopting leader {msg.leader}")
                 s.Members.term = msg.term
-                s.Members.leader = msg.leader
+                if msg.leader is not None:       # FIX: never adopt "no leader", it leaves the node stuck
+                    s.Members.leader = msg.leader
 
             if msg.type == "HEARTBEAT":
                 s.Heartbeats.last_beat[msg.sender] = time.monotonic()
@@ -82,5 +83,10 @@ async def sender(peer_id: int, message: m.Message, log) -> bool:
 async def peer_link(log):
     server = await asyncio.start_server(partial(handler, log), host="0.0.0.0", port=TCP_PORT)
     log.info("Peer server listening on TCP %d", TCP_PORT)
-    async with server:
-        await server.serve_forever()
+    # FIX: no serve_forever / async with. On Ctrl+C they wait for open connections and hang.
+    try:
+        await asyncio.Event().wait()             # the server already accepts; just stay alive
+    finally:
+        server.close()
+        server.close_clients()                   # Python >= 3.13
+        await server.wait_closed()

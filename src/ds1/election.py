@@ -1,26 +1,87 @@
 from __future__ import annotations
-from ds1 import state as s, messages as m
-from typing import Literal
-import asyncio
-from ds1 import peer_link as p
 
-ok_flag = asyncio.Event()           # set by on_ok          -> candidate got an OK
-objection_flag = asyncio.Event()    # set by on_ok          -> winner's claim was refused
-coordinator_flag = asyncio.Event()  # set by on_coordinator -> loser learns the winner announced
+import asyncio
+from typing import Literal
+
+from ds1 import messages as m
+from ds1 import peer_link as p
+from ds1 import state as s
+
+OK_TIMEOUT = 2.0            # wait 1: OK (or COORDINATOR) from a higher node
+COORDINATOR_TIMEOUT = 5.0   # wait 2: after an OK, the winner must announce (> OK_TIMEOUT)
+
+ok_flag = asyncio.Event()           # set by on_ok          -> a higher node is alive
+coordinator_flag = asyncio.Event()  # set by on_coordinator -> someone won, follow them
 
 election_running = False            # guard: one election at a time on this node
+_tasks: set[asyncio.Task] = set()   # strong refs, so fire-and-forget tasks are not garbage-collected
+
+
+# ---------- helpers ----------
+
+def _spawn(coro, log) -> asyncio.Task:
+    """Start a background task, keep a reference, and log it if it crashes."""
+    task = asyncio.create_task(coro)
+    _tasks.add(task)
+
+    def _done(t: asyncio.Task):
+        _tasks.discard(t)
+        if not t.cancelled() and t.exception() is not None:
+            log.error(f"Background task failed: {t.exception()!r}")
+
+    task.add_done_callback(_done)
+    return task
 
 
 def _msg(kind: Literal["ELECTION", "COORDINATOR", "OK"]) -> m.Message:
-    if kind == "COORDINATOR":       # announce the new term, I'm the leader
-        return m.Message(type=kind, sender=s.MyDetails.node_id,
-                         term=s.Members.term + 1, leader=s.MyDetails.node_id)
+    """Every message carries the current term and leader. The term is raised in _claim, not here."""
     return m.Message(type=kind, sender=s.MyDetails.node_id,
                      term=s.Members.term, leader=s.Members.leader)
 
 
 def _send(peer_id: int, msg: m.Message, log):
-    asyncio.create_task(p.sender(peer_id, msg, log))     # fire and forget, never block
+    _spawn(p.sender(peer_id, msg, log), log)   # fire and forget, never block
+
+
+def _peers() -> list[int]:
+    """Alive peers if we have heard any heartbeats, otherwise everyone discovery knows. Never ourselves."""
+    me = s.MyDetails.node_id
+    source = s.Heartbeats.last_beat if s.Heartbeats.last_beat else s.Members.members
+    return sorted(n for n in source if n != me)
+
+
+def _broadcast(kind: Literal["ELECTION", "COORDINATOR"], targets: list[int], log):
+    msg = _msg(kind)
+    for n in targets:
+        _send(n, msg, log)
+
+
+async def _wait_for_ok_or_coordinator(timeout: float):
+    """Wait until OK or COORDINATOR arrives, or the timeout passes."""
+    waiters = [asyncio.create_task(ok_flag.wait()),
+               asyncio.create_task(coordinator_flag.wait())]
+    try:
+        await asyncio.wait(waiters, timeout=timeout,
+                           return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        for w in waiters:
+            w.cancel()
+
+
+def _claim(log):
+    """Become leader. No await in here, so nothing can interrupt it halfway."""
+    s.Members.term += 1
+    s.Members.leader = s.MyDetails.node_id
+    _broadcast("COORDINATOR", _peers(), log)
+    log.info(f"Leader claimed by {s.MyDetails.node_id}, term {s.Members.term}")
+
+
+# ---------- the election ----------
+
+def trigger_election(log):
+    """The only way to start an election: from the watcher, on_election, or a retry."""
+    if not election_running:
+        _spawn(start_election(log), log)
 
 
 async def start_election(log):
@@ -28,67 +89,60 @@ async def start_election(log):
     if election_running:
         return
     election_running = True
+    retry = False
     try:
         ok_flag.clear()
-        higher = [n for n in s.Members.members if n > s.MyDetails.node_id]
-        for n in higher:
-            _send(n, _msg("ELECTION"), log)
-        log.info(f"Election raised by node {s.MyDetails.node_id}, asked {higher}")
-        await flag_event(log)
+        coordinator_flag.clear()
 
-    except asyncio.TimeoutError:
-        try:
-            objection_flag.clear()
-            for n in list(s.Members.members):
-                _send(n, _msg("COORDINATOR"), log)
-            log.info(f"Coordinator raised by node {s.MyDetails.node_id}")
-            await asyncio.wait_for(objection_flag.wait(), timeout=1)
-            election_running = False
-            asyncio.create_task(start_election(log))       # refused: run again
+        higher = [n for n in _peers() if n > s.MyDetails.node_id]
+        if higher:
+            _broadcast("ELECTION", higher, log)
+            log.info(f"Election raised by node {s.MyDetails.node_id}, asked {higher}")
 
-        except asyncio.TimeoutError:
-            s.Members.leader = s.MyDetails.node_id
-            s.Members.term += 1
-            log.info(f"Leader claimed by {s.Members.leader}, term {s.Members.term}")
+            await _wait_for_ok_or_coordinator(OK_TIMEOUT)
+            if coordinator_flag.is_set():
+                log.info(f"Leader {s.Members.leader} announced during election, not claiming")
+                return
+
+            if ok_flag.is_set():
+                try:
+                    await asyncio.wait_for(coordinator_flag.wait(), timeout=COORDINATOR_TIMEOUT)
+                    log.info(f"Following leader {s.Members.leader}, term {s.Members.term}")
+                except asyncio.TimeoutError:
+                    log.warning("Got OK but no COORDINATOR followed, restarting election")
+                    retry = True
+                return
+
+        # nobody higher answered, nobody announced: I am the highest alive
+        _claim(log)
     finally:
         election_running = False
-
-
-async def flag_event(log):
-    await asyncio.wait_for(ok_flag.wait(), timeout=3)      # TimeoutError -> caller claims
-    coordinator_flag.clear()
-    try:
-        await asyncio.wait_for(coordinator_flag.wait(), timeout=1)
-        return
-    except asyncio.TimeoutError:
-        global election_running
-        election_running = False
-        asyncio.create_task(start_election(log))
+        if retry:
+            trigger_election(log)
 
 
 # ---------- handlers: called by peer_link.handler ----------
 
 def on_election(msg: m.Message, log):
     if msg.sender < s.MyDetails.node_id:
-        _send(msg.sender, _msg("OK"), log)                 # back off, I'm higher
-        asyncio.create_task(start_election(log))
+        _send(msg.sender, _msg("OK"), log)        # back off, I'm higher
+        trigger_election(log)
 
 
 def on_ok(msg: m.Message, log):
+    if msg.term < s.Members.term or msg.sender < s.MyDetails.node_id:
+        return                                    # stale, or from a lower node: meaningless
     ok_flag.set()
-    objection_flag.set()
 
 
 def on_coordinator(msg: m.Message, log):
     if msg.term < s.Members.term:
-        return                                             # stale: ignore, no reply
+        return                                    # stale: ignore, no reply
     if (msg.term == s.Members.term and s.Members.leader is not None
             and s.Members.leader >= msg.sender):
-        return                                             # same term, already following a higher leader
-    if msg.sender > s.MyDetails.node_id:
-        s.Members.leader = msg.sender                      # accept silently
-        s.Members.term = msg.term
-        coordinator_flag.set()
-        log.info(f"Accepted leader {msg.sender}, term {msg.term}")
-    else:
-        _send(msg.sender, _msg("OK"), log)                 # refuse: I'm higher
+        return                                    # same term, already following an equal or higher leader
+    old = s.Members.leader
+    s.Members.leader = msg.sender                 # accept silently, never refuse
+    s.Members.term = msg.term
+    coordinator_flag.set()
+    log.info(f"Leader changed from {old} to {msg.sender}, term {msg.term}")
