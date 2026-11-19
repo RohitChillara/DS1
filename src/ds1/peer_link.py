@@ -2,7 +2,7 @@ from __future__ import annotations
 import asyncio
 import time
 from functools import partial
-from ds1 import messages as m, state as s
+from ds1 import messages as m, state as s, replication as r
 from ds1.config import TCP_PORT
 
 CONNECT_TIMEOUT = 1.0
@@ -25,6 +25,9 @@ async def handler(log, reader, writer):
                 log.error(f"Malformed data from {addr}: {e}")
                 continue
 
+            if (msg.type == "HEARTBEAT" and not s.Members.is_synced and s.Members.leader is None
+                and msg.leader is not None and msg.leader != s.MyDetails.node_id):
+                s.Members.leader = msg.leader          # only learn it; the startup task syncs
             if (msg.leader is not None and msg.leader < s.MyDetails.node_id
             and msg.type == "HEARTBEAT" and not election.election_running):
                 election.trigger_election(log)

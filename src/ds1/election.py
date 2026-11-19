@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Literal
-
-from ds1 import messages as m
-from ds1 import peer_link as p
-from ds1 import state as s
 import time
+
+from ds1 import comms as c
+from ds1 import messages as m
+from ds1 import state as s
 
 OK_TIMEOUT = 2.0            # wait 1: OK (or COORDINATOR) from a higher node
 COORDINATOR_TIMEOUT = 5.0   # wait 2: after an OK, the winner must announce (> OK_TIMEOUT)
@@ -15,45 +14,6 @@ ok_flag = asyncio.Event()           # set by on_ok          -> a higher node is 
 coordinator_flag = asyncio.Event()  # set by on_coordinator -> someone won, follow them
 
 election_running = False            # guard: one election at a time on this node
-_tasks: set[asyncio.Task] = set()   # strong refs, so fire-and-forget tasks are not garbage-collected
-
-
-# ---------- helpers ----------
-
-def _spawn(coro, log) -> asyncio.Task:
-    """Start a background task, keep a reference, and log it if it crashes."""
-    task = asyncio.create_task(coro)
-    _tasks.add(task)
-
-    def _done(t: asyncio.Task):
-        _tasks.discard(t)
-        if not t.cancelled() and t.exception() is not None:
-            log.error(f"Background task failed: {t.exception()!r}")
-
-    task.add_done_callback(_done)
-    return task
-
-
-def _msg(kind: Literal["ELECTION", "COORDINATOR", "OK"]) -> m.Message:
-    """Every message carries the current term and leader. The term is raised in _claim, not here."""
-    return m.Message(type=kind, sender=s.MyDetails.node_id, leader=s.Members.leader)
-
-
-def _send(peer_id: int, msg: m.Message, log):
-    _spawn(p.sender(peer_id, msg, log), log)   # fire and forget, never block
-
-
-def _peers() -> list[int]:
-    """Alive peers if we have heard any heartbeats, otherwise everyone discovery knows. Never ourselves."""
-    me = s.MyDetails.node_id
-    source = s.Heartbeats.last_beat if s.Heartbeats.last_beat else s.Members.members
-    return sorted(n for n in source if n != me)
-
-
-def _broadcast(kind: Literal["ELECTION", "COORDINATOR"], targets: list[int], log):
-    msg = _msg(kind)
-    for n in targets:
-        _send(n, msg, log)
 
 
 async def _wait_for_ok_or_coordinator(timeout: float):
@@ -71,7 +31,7 @@ async def _wait_for_ok_or_coordinator(timeout: float):
 def _claim(log):
     """Become leader. No await in here, so nothing can interrupt it halfway."""
     s.Members.leader = s.MyDetails.node_id
-    _broadcast("COORDINATOR", _peers(), log)
+    c.broadcast("COORDINATOR", c.peers(), log)
     log.info(f"Leader claimed by {s.MyDetails.node_id}")
 
 
@@ -79,8 +39,10 @@ def _claim(log):
 
 def trigger_election(log):
     """The only way to start an election: from the watcher, on_election, or a retry."""
-    if not election_running:        
-            _spawn(start_election(log), log)
+    if election_running or not s.Members.is_synced:
+        log.debug("Election skipped: not yet synced, or an election is already running")
+        return
+    c.spawn(start_election(log), log)
 
 
 async def start_election(log):
@@ -93,9 +55,9 @@ async def start_election(log):
         ok_flag.clear()
         coordinator_flag.clear()
 
-        higher = [n for n in _peers() if n > s.MyDetails.node_id]
+        higher = [n for n in c.peers() if n > s.MyDetails.node_id]
         if higher:
-            _broadcast("ELECTION", higher, log)
+            c.broadcast("ELECTION", higher, log)
             log.info(f"Election raised by node {s.MyDetails.node_id}, asked {higher}")
 
             await _wait_for_ok_or_coordinator(OK_TIMEOUT)
@@ -124,7 +86,7 @@ async def start_election(log):
 
 def on_election(msg: m.Message, log):
     if msg.sender < s.MyDetails.node_id:
-        _send(msg.sender, _msg("OK"), log)        # back off, I'm higher
+        c.send(msg.sender, c.make_msg("OK"), log)     # back off, I'm higher
         trigger_election(log)
 
 
@@ -133,7 +95,10 @@ def on_ok():
 
 
 def on_coordinator(msg: m.Message, log):
-    if msg.sender > s.MyDetails.node_id:                
+    if not s.Members.is_synced:
+        s.Members.leader = msg.sender      # learn it; startup syncs, then elects
+        return
+    if msg.sender > s.MyDetails.node_id:
         old = s.Members.leader
         s.Members.leader = msg.sender
         coordinator_flag.set()
