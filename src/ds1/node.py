@@ -81,7 +81,8 @@ async def main(log):
                          web.serve(log))
 
 
-if __name__ == "__main__":
+
+def run():
     p = argparse.ArgumentParser()
     p.add_argument("node_id", type=int)
     a = p.parse_args()
@@ -95,9 +96,12 @@ if __name__ == "__main__":
     prepare_files()
     load()
     log.info(f"Loaded {len(s.Storage.image_metadata)} photo(s), last position {st.last_position()}, "
-             f"epoch {st.get_epoch()}")
+                f"epoch {st.get_epoch()}")
 
     try:
         asyncio.run(main(log))
     except KeyboardInterrupt:
         pass
+
+if __name__ == "__main__":
+    run()
