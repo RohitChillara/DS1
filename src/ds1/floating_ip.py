@@ -73,15 +73,32 @@ def holds() -> bool:
 
 
 def release_now(log) -> None:
-    """Drop the address. Safe to call when we don't hold it. Used at startup (a crash may
-    have left it behind) and at shutdown (so Ctrl+C hands it over quickly)."""
-    if iface is None or not holds():
+    """Drop the address. Used at startup (a crash may have left it behind) and at shutdown
+    (so Ctrl+C hands it over quickly). Always tries the delete: the address can be on the
+    adapter without being usable (holds() is False), and it must go in that case too.
+    If it isn't there, the command just fails and we stay quiet."""
+    if iface is None:
         return
-    ok, out = _run(_delete_cmd())
+    ok, _ = _run(_delete_cmd())
     if ok:
         log.info(f"Released floating IP {ip}")
-    else:
-        log.warning(f"Couldn't release floating IP {ip}: {out}")
+
+
+def _why_unusable() -> str:
+    """The address is on the adapter but can't be used. Say why, if the OS tells us."""
+    if sys.platform == "win32":
+        _, out = _run(["netsh", "interface", "ipv4", "show", "ipaddresses", f"interface={iface}"])
+        for line in out.splitlines():
+            if ip in line:
+                if "Duplicate" in line:
+                    return "Windows marked it Duplicate: another device on the network uses it"
+                if "Tentative" in line:
+                    return "Windows is still checking it (Tentative)"
+                return f"Windows reports it as: {line.strip()}"
+        _, out2 = _run(["netsh", "interface", "show", "interface", f"name={iface}"])
+        if "Disconnected" in out2:
+            return f"adapter {iface!r} is disconnected (no cable or no network)"
+    return f"the address is on {iface!r} but not usable; is the adapter connected?"
 
 
 # ---------- the loop ----------
@@ -116,6 +133,11 @@ async def floating_ip(log):
             ok, out = await asyncio.to_thread(_run, _add_cmd())
             if ok:
                 log.info(f"Took floating IP {ip}")
+            elif "exist" in out.lower() or "file exists" in out.lower():
+                # Already on the adapter but not usable: adding again won't help, so say why
+                # once per retry period instead of repeating the OS error.
+                reason = await asyncio.to_thread(_why_unusable)
+                log.warning(f"Floating IP {ip} not usable: {reason}")
             else:
                 log.warning(f"Couldn't take floating IP {ip}: {out}")
             next_try = loop.time() + RETRY_AFTER     # Windows needs a moment to finish adding
