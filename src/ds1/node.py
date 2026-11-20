@@ -1,5 +1,5 @@
 import argparse, asyncio, logging, time, json, random
-from ds1 import state as s, discovery, peer_link, election, monitor, replication as r, store as st, web
+from ds1 import state as s, discovery, peer_link, election, monitor, replication as r, store as st, web, floating_ip
 from ds1.config import JSON_DIR, BIN_DIR, EPOCH_DIR
 
 METADATA_FILE = JSON_DIR / "metadata.json"
@@ -78,14 +78,18 @@ def load() -> None:
 async def main(log):
     await asyncio.gather(peer_link.peer_link(log), discovery.discovery(log),
                          monitor.watch_peers(log), elect(log), periodic_sync(log),
-                         web.serve(log))
+                         web.serve(log), floating_ip.floating_ip(log))
 
 
 
 def run():
     p = argparse.ArgumentParser()
     p.add_argument("node_id", type=int)
+    p.add_argument("--iface", help="adapter for the floating IP: en0 (macOS), Wi-Fi (Windows); "
+                                   "leave out to run without a floating IP")
+    p.add_argument("--floating-ip", default=floating_ip.ip, help="override config.FLOATING_IP")
     a = p.parse_args()
+    floating_ip.iface, floating_ip.ip = a.iface, a.floating_ip
     s.MyDetails.node_id = a.node_id              # set first: the epoch file is keyed by node id
     s.MyDetails.start_time = time.monotonic()
     s.Members.leader = None
@@ -102,6 +106,8 @@ def run():
         asyncio.run(main(log))
     except KeyboardInterrupt:
         pass
+    finally:
+        floating_ip.release_now(log)             # hand the address over at once, not after a timeout
 
 if __name__ == "__main__":
     run()
