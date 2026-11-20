@@ -35,16 +35,17 @@
   header { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 20px; }
   h1 { font: 700 2.4rem/1.05 var(--ui); letter-spacing: -0.02em; margin: 0; }
   .sub { margin: 6px 0 0; color: var(--slate); font-size: 0.95rem; }
-  .machines { display: flex; gap: 14px; align-items: flex-end; }
-  .machine { position: relative; text-align: center; min-width: 74px; padding: 8px 6px 6px; }
-  .machine svg { display: block; margin: 0 auto 4px; }
-  .machine .name { font: 500 0.85rem/1.2 var(--ui); }
-  .machine .role { font: 600 0.75rem/1.2 var(--edge-font); color: var(--slate); }
-  .machine.down { opacity: 0.45; }
-  .machine.down .role { color: var(--pencil); }
-  .machine .ring { position: absolute; inset: -8px -12px; pointer-events: none; display: none; }
-  .machine.leader .ring { display: block; }
-  .machine.leader .role { color: var(--pencil); }
+  .leader-box { text-align: right; }
+  .leader-box .label { font: 500 0.85rem/1.2 var(--ui); color: var(--slate); }
+  .leader-box .host { font: 700 1.3rem/1.25 var(--ui); margin-top: 2px; }
+  .leader-box .id { font: 500 0.95rem var(--ui); color: var(--slate); }
+  .nodes { margin-top: 24px; }
+  .nodes h2 { margin-bottom: 8px; }
+  .nodes table { border-collapse: collapse; width: 100%; max-width: 560px; font-size: 0.95rem; }
+  .nodes th { text-align: left; font-weight: 500; color: var(--slate); padding: 4px 16px 4px 0; border-bottom: 1px solid var(--line); }
+  .nodes td { padding: 6px 16px 6px 0; border-bottom: 1px solid var(--line); }
+  .nodes tr.is-leader td { font-weight: 700; }
+  .nodes .down { color: var(--pencil); }
 
   /* ---------- drop area ---------- */
   .drop {
@@ -104,8 +105,7 @@
   @media (max-width: 600px) {
     .wrap { padding: 22px 16px 48px; }
     h1 { font-size: 1.9rem; }
-    .machines { gap: 6px; }
-    .machine { min-width: 64px; }
+    .leader-box { text-align: left; }
     .strip { grid-template-columns: repeat(2, 1fr); padding: 20px 10px; }
   }
   @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
@@ -116,10 +116,18 @@
   <header>
     <div>
       <h1>Shared album</h1>
-      <p class="sub" id="sub">Every photo is kept on all three machines.</p>
+      <p class="sub" id="sub">Every photo is kept on every machine.</p>
     </div>
-    <div class="machines" id="machines" aria-label="Machines in the cluster"></div>
+    <div class="leader-box" id="leader" aria-live="polite"></div>
   </header>
+
+  <section class="nodes" aria-live="polite">
+    <h2 id="nodes-title">Nodes</h2>
+    <table>
+      <thead><tr><th>node_id</th><th>Hostname</th><th>Role</th><th>State</th></tr></thead>
+      <tbody id="nodes"></tbody>
+    </table>
+  </section>
 
   <div class="notice" id="notice" role="status"></div>
 
@@ -163,35 +171,56 @@ async function refreshStatus() {
     status = null;
     showNotice("This machine isn't answering. Open the album from another machine's address.");
   }
-  drawMachines();
+  drawLeader();
   return status;
 }
 
-function drawMachines() {
-  const box = $("machines");
-  if (!status) { box.innerHTML = ""; return; }
-  box.innerHTML = "";
-  for (const n of [...status.nodes].sort((a, b) => a.id - b.id)) {
-    const isLeader = n.id === status.leader;
-    const el = document.createElement("div");
-    el.className = "machine" + (isLeader ? " leader" : "") + (n.alive ? "" : " down");
-    el.innerHTML = `
-      <svg class="ring" viewBox="0 0 100 80" preserveAspectRatio="none" aria-hidden="true">
-        <path d="M50 4 C82 3 97 20 95 42 C93 66 70 77 47 76 C20 75 4 60 5 38 C6 17 24 6 56 7"
-              fill="none" stroke="#B4322A" stroke-width="3" stroke-linecap="round"/>
-      </svg>
-      <svg width="30" height="26" viewBox="0 0 30 26" aria-hidden="true">
-        <rect x="1" y="1" width="28" height="18" rx="2" fill="none" stroke="#1E2428" stroke-width="2"/>
-        <path d="M10 25h10M15 19v6" stroke="#1E2428" stroke-width="2"/>
-      </svg>
-      <div class="name"></div><div class="role"></div>`;
-    el.querySelector(".name").textContent = `Machine ${n.id}` + (n.self ? " (this one)" : "");
-    el.querySelector(".role").textContent = !n.alive ? "not responding" : isLeader ? "receives uploads" : "keeps a copy";
-    box.appendChild(el);
+const hostnames = {};      // node_id -> hostname; each node reports its own name in /api/status
+
+async function hostnameOf(n) {
+  if (n.self) return status.hostname;
+  if (hostnames[n.id]) return hostnames[n.id];
+  if (!n.alive || !n.url) return null;
+  try {
+    const st = await (await fetch(n.url + "/api/status", { cache: "no-store" })).json();
+    hostnames[n.id] = st.hostname;
+    return st.hostname;
+  } catch { return null; }            // that node isn't reachable from this browser
+}
+
+async function drawLeader() {
+  const box = $("leader"), rows = $("nodes");
+  if (!status) { box.innerHTML = ""; rows.innerHTML = ""; return; }
+  const nodes = [...status.nodes].sort((a, b) => a.id - b.id);
+  const names = await Promise.all(nodes.map(hostnameOf));
+
+  box.innerHTML = `<div class="label">Leader</div><div class="host"></div><div class="id"></div>`;
+  if (status.leader == null) {
+    box.querySelector(".host").textContent = "Electing…";
+  } else {
+    const i = nodes.findIndex((n) => n.id === status.leader);
+    box.querySelector(".host").textContent = (i >= 0 && names[i]) || `Node ${status.leader}`;
+    box.querySelector(".id").textContent = `node_id ${status.leader}` + (status.is_leader ? " (this machine)" : "");
   }
+
+  $("nodes-title").textContent = `Nodes (${nodes.length})`;
+  rows.innerHTML = "";
+  nodes.forEach((n, i) => {
+    const tr = document.createElement("tr");
+    if (n.id === status.leader) tr.className = "is-leader";
+    const cells = [
+      String(n.id),
+      (names[i] ?? "unknown") + (n.self ? " (this one)" : ""),
+      n.id === status.leader ? "Leader" : "Backup",
+      n.alive ? "Up" : "Down",
+    ];
+    for (const c of cells) { const td = document.createElement("td"); td.textContent = c; tr.appendChild(td); }
+    if (!n.alive) tr.lastChild.className = "down";
+    rows.appendChild(tr);
+  });
   $("sub").textContent = status.leader == null
     ? "Choosing which machine receives uploads…"
-    : "Every photo is kept on all three machines.";
+    : `Every photo is kept on all ${nodes.length} machines.`;
 }
 
 function showNotice(text) { const n = $("notice"); n.textContent = text; n.classList.add("show"); }

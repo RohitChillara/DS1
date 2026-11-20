@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import socket
 from pathlib import Path
 
 import uvicorn
@@ -41,14 +42,16 @@ async def status():
     alive = sorted(s.Heartbeats.last_beat)
     return {
         "node": me,
+        "hostname": socket.gethostname(),
         "leader": leader,
         "is_leader": leader == me,
         "leader_url": _node_url(leader) if leader is not None else None,
         "epoch": st.get_epoch(),
         "position": list(st.last_position()),
         "photos": len(s.Storage.image_metadata),
-        "nodes": [{"id": me, "alive": True, "self": True}]
-                 + [{"id": n, "alive": n in alive, "self": False} for n in sorted(s.Members.members)],
+        "nodes": [{"id": me, "alive": True, "self": True, "url": None}]
+                 + [{"id": n, "alive": n in alive, "self": False, "url": _node_url(n)}
+                    for n in sorted(s.Members.members)],
         "max_photo_size": MAX_PHOTO_SIZE,
     }
 
