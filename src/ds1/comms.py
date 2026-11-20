@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Literal
+from typing import Literal,Iterable
 
 from ds1 import messages as m, state as s, peer_link as p
 
@@ -40,7 +40,12 @@ def peers() -> list[int]:
     return sorted(n for n in source if n != me)
 
 
-def broadcast(kind: Literal["ELECTION", "COORDINATOR"], targets: list[int], log):
-    msg = make_msg(kind)
+def broadcast(kind: m.MsgType, targets: Iterable[int], log, message: m.Message |None=None):
+    if kind in ("ELECTION","COORDINATOR"):
+        msg = make_msg(kind)
+    else:
+        msg = message
     for n in targets:
         send(n, msg, log)
+    if kind not in ("ELECTION", "COORDINATOR") and message is None:
+        raise ValueError(f"broadcast({kind}) needs a message")

@@ -1,20 +1,28 @@
 # messages.py: the message format only. No networking, no state.
 from typing import Literal
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
-MsgType = Literal["HELLO", "HELLO_ACK", "JOIN", "WELCOME", "MEMBER_JOIN", "MEMBER_LEAVE",
-                  "HEARTBEAT", "ELECTION", "OK", "COORDINATOR", "STATE", "ACK"]
+MsgType = Literal["HELLO", "HELLO_ACK", "HEARTBEAT",
+                  "ELECTION", "OK", "COORDINATOR",
+                  "SYNC", "STATE", "STATE_ACK",
+                  "REQUEST", "DATA", "DATA_ACK"]
 
 
 class Message(BaseModel):
+    model_config = ConfigDict(ser_json_bytes="base64", val_json_bytes="base64")
     type: MsgType
     sender: int
-    term: int = 0
     leader: int | None = None
-    seq: int | None = None
-    epoch: int = 0                      # default, so messages without an epoch still validate
-    members: dict[int, tuple[str, int]] | None = None
 
+    # replication position: STATE, STATE_ACK, REQUEST, DATA, DATA_ACK
+    epoch: int = 0
+    seq: int = 0
+
+    # DATA only: the photo's metadata; the raw bytes follow the header line
+    image_id: str | None = None
+    file_name: str | None = None
+    size: int = 0
+    data: bytes | None = None
 
 def encode(msg: Message) -> bytes:
     """For TCP: one JSON object per line."""

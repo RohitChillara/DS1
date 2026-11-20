@@ -1,22 +1,28 @@
-from dataclasses import dataclass,field
-import json
-
-@dataclass
 class Members:
-    leader : int | None
-    members : dict[int,str] = field(default_factory=dict)
-    is_synced : bool = False
+    leader: int | None = None
+    members: dict[int, str] = {}
+    is_synced: bool = False
 
 
-@dataclass
 class Storage:
-    image_metadata: dict[tuple[int, int], dict] = field(default_factory=dict)
-    epoch: dict[str, int] = field(default_factory=dict)
+    image_metadata: dict[tuple[int, int], dict] = {}
+    epoch: dict[str, int] = {}
 
-@dataclass(frozen=True)
+
+class CurrentMessage:
+    leader_epoch: int = 0          # the leader's position from its last STATE
+    leader_seq: int = 0
+
+
+class Bookkeeper:
+    recipients: set[int] = set()
+    acks: set[int] = set()
+
+
 class MyDetails:
-    node_id: int
+    node_id: int = 0
+    start_time: float = 0.0        # node.py sets it; declared here so it's visible
 
-@dataclass
+
 class Heartbeats:
-    last_beat : dict[int,float] = field(default_factory=dict)
+    last_beat: dict[int, float] = {}

@@ -2,17 +2,18 @@ from __future__ import annotations
 import asyncio
 import time
 from functools import partial
-from ds1 import messages as m, state as s, replication as r
-from ds1.config import TCP_PORT
+from ds1 import messages as m, state as s
+from ds1.config import TCP_PORT, MAX_PHOTO_SIZE
 
 CONNECT_TIMEOUT = 1.0
+LINE_LIMIT = MAX_PHOTO_SIZE * 4 // 3 + 64 * 1024
 
 _outbound: dict[int, asyncio.StreamWriter] = {}
 _locks: dict[int, asyncio.Lock] = {}
 
 
 async def handler(log, reader, writer):
-    from ds1 import election                    # imported here to avoid the import cycle
+    from ds1 import election, replication as r, comms as c   # imported here to avoid import cycles
     addr = writer.get_extra_info("peername")
     try:
         while True:
@@ -31,6 +32,8 @@ async def handler(log, reader, writer):
             if (msg.leader is not None and msg.leader < s.MyDetails.node_id
             and msg.type == "HEARTBEAT" and not election.election_running):
                 election.trigger_election(log)
+
+            # ---------- failure detection and election ----------
             if msg.type == "HEARTBEAT":
                 s.Heartbeats.last_beat[msg.sender] = time.monotonic()
             elif msg.type == "ELECTION":
@@ -39,10 +42,29 @@ async def handler(log, reader, writer):
                 election.on_ok()
             elif msg.type == "COORDINATOR":
                 election.on_coordinator(msg, log)
+
+            # ---------- replication: leader side ----------
+            elif msg.type == "SYNC":
+                r.on_sync(msg, log)
+            elif msg.type == "STATE_ACK":
+                r.check_ack_status(msg, log)
+            elif msg.type == "REQUEST":
+                r.check_ack_status(msg, log)            # a REQUEST also means the STATE arrived
+                c.spawn(r.on_request(msg, log), log)    # own task: the DATA_ACKs arrive on this
+                                                        # same connection and must still be read
+            elif msg.type == "DATA_ACK":
+                r.on_data_ack(msg, log)
+
+            # ---------- replication: backup side ----------
+            elif msg.type == "STATE":
+                r.on_state(msg, log)
+            elif msg.type == "DATA":
+                c.spawn(r.collect_data(msg, log), log)  
+
             else:
                 log.warning(f"Unexpected {msg.type} from {msg.sender}")
-    except OSError as e:
-        log.warning(f"Inbound link {addr} error: {e.__class__.__name__}")
+    except (OSError, ValueError) as e:                  # ValueError: a line longer than LINE_LIMIT
+        log.warning(f"Inbound link {addr} error: {e.__class__.__name__}: {e}")
     finally:
         writer.close()
         try:
@@ -88,12 +110,12 @@ async def sender(peer_id: int, message: m.Message, log) -> bool:
 
 
 async def peer_link(log):
-    server = await asyncio.start_server(partial(handler, log), host="0.0.0.0", port=TCP_PORT)
+    server = await asyncio.start_server(partial(handler, log), host="0.0.0.0", port=TCP_PORT,
+                                        limit=LINE_LIMIT)          # FIX: room for the base64 photo
     log.info("Peer server listening on TCP %d", TCP_PORT)
-    # FIX: no serve_forever / async with. On Ctrl+C they wait for open connections and hang.
     try:
         await asyncio.Event().wait()             # the server already accepts; just stay alive
     finally:
         server.close()
-        server.close_clients()                   # Python >= 3.13
+        server.close_clients()                   
         await server.wait_closed()

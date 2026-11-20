@@ -6,6 +6,7 @@ import time
 from ds1 import comms as c
 from ds1 import messages as m
 from ds1 import state as s
+from ds1 import store as st
 
 OK_TIMEOUT = 2.0            # wait 1: OK (or COORDINATOR) from a higher node
 COORDINATOR_TIMEOUT = 5.0   # wait 2: after an OK, the winner must announce (> OK_TIMEOUT)
@@ -28,11 +29,22 @@ async def _wait_for_ok_or_coordinator(timeout: float):
             w.cancel()
 
 
+def _adopt_epoch(msg: m.Message, log):
+    """Replication bookkeeping only: never decides who leads."""
+    if msg.epoch > st.get_epoch():
+        st.set_epoch(msg.epoch)                      # saved to disk before it's used
+        log.info(f"Epoch {msg.epoch} adopted from node {msg.sender}")
+
+
 def _claim(log):
     """Become leader. No await in here, so nothing can interrupt it halfway."""
+    st.set_epoch(st.get_epoch() + 1)                 # NEW: saved before it is announced
     s.Members.leader = s.MyDetails.node_id
-    c.broadcast("COORDINATOR", c.peers(), log)
-    log.info(f"Leader claimed by {s.MyDetails.node_id}")
+    announce = m.Message(type="COORDINATOR", sender=s.MyDetails.node_id,
+                         leader=s.MyDetails.node_id, epoch=st.get_epoch())
+    for n in c.peers():                              # NEW: COORDINATOR carries the new epoch
+        c.send(n, announce, log)
+    log.info(f"Leader claimed by {s.MyDetails.node_id}, epoch {st.get_epoch()}")
 
 
 # ---------- the election ----------
@@ -95,6 +107,7 @@ def on_ok():
 
 
 def on_coordinator(msg: m.Message, log):
+    _adopt_epoch(msg, log)                 # NEW: whatever the decision below, remember the epoch
     if not s.Members.is_synced:
         s.Members.leader = msg.sender      # learn it; startup syncs, then elects
         return
@@ -103,7 +116,8 @@ def on_coordinator(msg: m.Message, log):
         s.Members.leader = msg.sender
         coordinator_flag.set()
         s.Heartbeats.last_beat[msg.sender] = time.monotonic()
-        log.info(f"Leader changed from {old} to {msg.sender}")
+        if old != msg.sender:              # repeated announcements of the same leader aren't news
+            log.info(f"Leader changed from {old} to {msg.sender}")
     else:
         trigger_election(log)
         log.info(f"Coordinator request refused for {msg.sender}")

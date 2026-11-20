@@ -67,21 +67,21 @@ def last_position() -> tuple[int, int]:
     return max(s.Storage.image_metadata, default=(0, 0))
 
 
-def save_photo(photo, photo_bin: bytes) -> None:
+def save_photo(photo,log) -> None:
     key = (photo.epoch, photo.seq)
 
     # order: image first, then metadata (the commit marker), then epoch, then memory
-    _atomic_write_bytes(BIN_DIR / photo.image_id, photo_bin)
+    _atomic_write_bytes(BIN_DIR / photo.image_id, photo.data)
 
     new_index = dict(s.Storage.image_metadata)
-    new_index[key] = photo.model_dump()
+    new_index[key] = photo.model_dump(exclude={"data"})
     _save_index(new_index)
 
     if photo.epoch > get_epoch():
         set_epoch(photo.epoch)
 
     s.Storage.image_metadata = new_index          # memory last: only after the disk has it
-
+    log.debug(f"Photo {photo.image_id} written to disk.")
 
 def remove(key: tuple[int, int]) -> None:
     """Drop an entry (used by sync for unconfirmed leftovers): metadata first, then the image."""
