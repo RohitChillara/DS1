@@ -19,7 +19,10 @@ sync_event = asyncio.Event()     # set by on_state:         the leader's positio
 req_event = asyncio.Event()      # set by collect_data:     a DATA arrived, so the REQUEST was answered
 sync_finish = asyncio.Event()    # set by check_status:     caught up with the leader
 ack_event = asyncio.Event()      # set by check_ack_status: every STATE recipient answered
-data_events: dict[int, asyncio.Event] = {}      # one per backup: set by on_data_ack
+data_events: dict[int, asyncio.Event] = {}
+acked: dict[int, tuple[int, int]] = {}  # leader: each backup's last reported position
+syncing = False                         # backup: a sync() is running and waits for STATE
+CONFIRM_TIMEOUT = 10.0      # leader: upload -> waiting until every live backup has the photo      # one per backup: set by on_data_ack
 store_lock = asyncio.Lock()      # one disk write at a time, even when DATA handling is spawned
 
 
@@ -54,8 +57,10 @@ async def sync(log, attempt=1):
         return
     if s.Members.leader is None or s.Members.leader == s.MyDetails.node_id:
         return
+    global syncing
     sync_event.clear()
     sync_finish.clear()
+    syncing = True
     c.send(s.Members.leader, _msg("SYNC"), log)
     try:
         await asyncio.wait_for(sync_event.wait(), timeout=SYNC_TIMEOUT)
@@ -70,7 +75,10 @@ async def sync(log, attempt=1):
         log.info(f"Sync complete at {st.last_position()}")
     except asyncio.TimeoutError:
         log.warning(f"Sync attempt {attempt} timed out, re-attempting")
+        syncing = False
         await sync(log, attempt + 1)
+    finally:
+        syncing = False
 
 
 async def raise_request(position, log) -> bool:
@@ -93,10 +101,18 @@ async def raise_request(position, log) -> bool:
 # ---------- backup side: handlers (called from peer_link.handler) ----------
 
 def on_state(msg: m.Message, log):
-    """Remember the leader's position, then wake up sync."""
+    """Remember the leader's position. During a sync, wake it up. Otherwise this is the
+    leader announcing an upload: answer with STATE_ACK if up to date, or request what's missing."""
     s.CurrentMessage.leader_epoch = msg.epoch
     s.CurrentMessage.leader_seq = msg.seq
-    sync_event.set()
+    if syncing:
+        sync_event.set()
+        return
+    position = st.last_position()
+    if position >= _target():
+        c.send(msg.sender, _msg("STATE_ACK", {"epoch": position[0], "seq": position[1]}), log)
+    else:
+        c.spawn(raise_request(position, log), log)   # the push ends in DATA_ACKs
 
 
 async def collect_data(msg: m.Message, log):
@@ -152,6 +168,7 @@ async def state(log, recipients: set[int] | None = None, attempts: int = 1):
 
 def check_ack_status(msg: m.Message, log):
     """Called for STATE_ACK and REQUEST: either one means this backup got the STATE."""
+    _record(msg)
     s.Bookkeeper.acks.add(msg.sender)                     
     if s.Bookkeeper.recipients <= s.Bookkeeper.acks:
         ack_event.set()
@@ -189,7 +206,48 @@ async def on_request(msg: m.Message, log):
             return                                       # never skip a photo: leave no gaps
 
 
+def _record(msg: m.Message):
+    """Remember the highest position this backup has reported (STATE_ACK, REQUEST, DATA_ACK)."""
+    position = (msg.epoch, msg.seq)
+    if position > acked.get(msg.sender, (0, 0)):
+        acked[msg.sender] = position
+
+
 def on_data_ack(msg: m.Message, log):
+    _record(msg)
     event = data_events.get(msg.sender)
     if event is not None:
         event.set()                                      # only releases the push to this backup
+
+# ---------- leader side: uploads ----------
+
+class NotLeader(Exception):
+    """Raised when an upload reaches a node that isn't the leader."""
+
+
+async def upload(file_name: str, data: bytes, upload_id: str, log) -> dict:
+    """Leader: store a new photo, announce it, and wait until every live backup has it.
+    A photo is 'saved' only once all live backups have ACKed its position."""
+    if s.Members.leader != s.MyDetails.node_id:
+        raise NotLeader()
+    meta, created = await asyncio.to_thread(st.create_photo, file_name, data, upload_id, log)
+    position = (meta["epoch"], meta["seq"])
+    log.info(f"Upload {file_name!r} stored at {position}" + ("" if created else " (retry, already stored)"))
+    c.spawn(state(log), log)                       # backups request it, the push delivers it
+
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + CONFIRM_TIMEOUT
+    while True:
+        backups = [p for p in c.peers()]           # live backups right now
+        missing = [p for p in backups if acked.get(p, (0, 0)) < position]
+        if not missing or loop.time() >= deadline:
+            break
+        await asyncio.sleep(0.05)
+
+    confirmed = [p for p in backups if p not in missing]
+    if missing:
+        log.warning(f"Upload {position} not confirmed by {missing} within {CONFIRM_TIMEOUT}s")
+    else:
+        log.info(f"Upload {position} saved on leader and {confirmed or 'no backups'}")
+    return {"photo": meta, "created": created, "saved": not missing,
+            "confirmed_by": confirmed, "missing": missing}

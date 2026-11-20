@@ -1,11 +1,15 @@
-import json, os, uuid
+import json, os, threading, uuid
 from pathlib import Path
-from ds1.config import JSON_DIR, BIN_DIR, EPOCH_DIR
-from ds1 import state as s
+from ds1.config import JSON_DIR, BIN_DIR, EPOCH_DIR, MAX_PHOTO_SIZE
+from ds1 import state as s, messages as m
 
 # Folders and the starting files ({} each) are created by node.py before load() runs.
 METADATA_FILE = JSON_DIR / "metadata.json"
 EPOCH_FILE = EPOCH_DIR / "epoch.json"
+
+# One write at a time. The store functions run in helper threads (asyncio.to_thread), and two
+# uploads at once must not pick the same seq or overwrite each other's index entry.
+_write_lock = threading.Lock()
 
 
 # ---------- disk helpers ----------
@@ -46,6 +50,7 @@ def _save_index(index: dict) -> None:
 def _my_key() -> str:
     return str(s.MyDetails.node_id)               # JSON keys are strings
 
+
 # ---------- epoch ----------
 
 def get_epoch() -> int:
@@ -67,7 +72,8 @@ def last_position() -> tuple[int, int]:
     return max(s.Storage.image_metadata, default=(0, 0))
 
 
-def save_photo(photo,log) -> None:
+def _save_locked(photo, log) -> None:
+    """The actual write. Callers hold _write_lock."""
     key = (photo.epoch, photo.seq)
 
     # order: image first, then metadata (the commit marker), then epoch, then memory
@@ -81,18 +87,57 @@ def save_photo(photo,log) -> None:
         set_epoch(photo.epoch)
 
     s.Storage.image_metadata = new_index          # memory last: only after the disk has it
-    log.debug(f"Photo {photo.image_id} written to disk.")
+    log.debug(f"Photo {photo.image_id} written to disk at {key}.")
+
+
+def save_photo(photo, log) -> None:
+    """Backups: store a photo the leader sent, at the position the leader gave it."""
+    with _write_lock:
+        _save_locked(photo, log)
+
+
+def find_upload(upload_id: str) -> dict | None:
+    """The stored entry for this upload id, or None. Detects a client's retry after a failover."""
+    for meta in s.Storage.image_metadata.values():
+        if meta.get("upload_id") == upload_id:
+            return meta
+    return None
+
+
+def create_photo(file_name: str, data: bytes, upload_id: str, log) -> tuple[dict, bool]:
+    """Leader only: stamp a new upload with (current epoch, next seq) and store it.
+    Returns (metadata, created). created is False if this upload_id was already stored:
+    a retry, which gets the existing entry back instead of a second copy."""
+    if len(data) > MAX_PHOTO_SIZE:
+        raise ValueError(f"Photo is {len(data)} bytes; the limit is {MAX_PHOTO_SIZE}")
+    with _write_lock:                             # position and write in one step: no two uploads share a seq
+        existing = find_upload(upload_id)
+        if existing is not None:
+            return existing, False
+        seq = last_position()[1] + 1              # seq keeps counting across epochs
+        photo = m.Message(type="DATA", sender=s.MyDetails.node_id, epoch=get_epoch(), seq=seq,
+                          image_id=str(uuid.uuid4()), file_name=file_name, size=len(data),
+                          upload_id=upload_id, data=data)
+        _save_locked(photo, log)
+        return photo.model_dump(exclude={"data"}), True
+
 
 def remove(key: tuple[int, int]) -> None:
     """Drop an entry (used by sync for unconfirmed leftovers): metadata first, then the image."""
-    meta = s.Storage.image_metadata.get(key)
-    if meta is None:
-        return
-    new_index = dict(s.Storage.image_metadata)
-    del new_index[key]
-    _save_index(new_index)                        # once this is saved, the photo no longer exists
-    s.Storage.image_metadata = new_index
-    (BIN_DIR / meta["image_id"]).unlink(missing_ok=True)
+    with _write_lock:
+        meta = s.Storage.image_metadata.get(key)
+        if meta is None:
+            return
+        new_index = dict(s.Storage.image_metadata)
+        del new_index[key]
+        _save_index(new_index)                    # once this is saved, the photo no longer exists
+        s.Storage.image_metadata = new_index
+        (BIN_DIR / meta["image_id"]).unlink(missing_ok=True)
+
+
+def list_photos() -> list[dict]:
+    """All stored photos, oldest first: what the gallery shows."""
+    return [s.Storage.image_metadata[k] for k in sorted(s.Storage.image_metadata)]
 
 
 def get_photo(image_id: str) -> bytes:

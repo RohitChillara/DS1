@@ -1,0 +1,307 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Shared album</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;700&family=Archivo+Narrow:wght@500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --table: #EDF1F3;        /* light table */
+    --table-glow: #F7F9FA;
+    --film: #2A2119;         /* film base */
+    --edge: #C98A3A;         /* frame-edge printing */
+    --pencil: #B4322A;       /* grease pencil */
+    --ink: #1E2428;
+    --slate: #6B767D;
+    --line: #D3DADE;
+    --ui: "Archivo", system-ui, sans-serif;
+    --edge-font: "Archivo Narrow", "Arial Narrow", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: radial-gradient(ellipse at 50% 0%, var(--table-glow), var(--table) 70%);
+    background-color: var(--table);
+    color: var(--ink);
+    font: 400 16px/1.5 var(--ui);
+    min-height: 100vh;
+  }
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 32px 24px 64px; }
+
+  /* ---------- header ---------- */
+  header { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 20px; }
+  h1 { font: 700 2.4rem/1.05 var(--ui); letter-spacing: -0.02em; margin: 0; }
+  .sub { margin: 6px 0 0; color: var(--slate); font-size: 0.95rem; }
+  .machines { display: flex; gap: 14px; align-items: flex-end; }
+  .machine { position: relative; text-align: center; min-width: 74px; padding: 8px 6px 6px; }
+  .machine svg { display: block; margin: 0 auto 4px; }
+  .machine .name { font: 500 0.85rem/1.2 var(--ui); }
+  .machine .role { font: 600 0.75rem/1.2 var(--edge-font); color: var(--slate); }
+  .machine.down { opacity: 0.45; }
+  .machine.down .role { color: var(--pencil); }
+  .machine .ring { position: absolute; inset: -8px -12px; pointer-events: none; display: none; }
+  .machine.leader .ring { display: block; }
+  .machine.leader .role { color: var(--pencil); }
+
+  /* ---------- drop area ---------- */
+  .drop {
+    margin-top: 28px; border: 2px dashed var(--line); border-radius: 6px;
+    padding: 34px 24px; display: grid; gap: 8px; justify-items: start;
+    background: rgba(255,255,255,0.45); transition: border-color .15s, background .15s;
+  }
+  .drop.over { border-color: var(--edge); background: rgba(201,138,58,0.08); }
+  .drop strong { font: 700 1.25rem/1.3 var(--ui); }
+  .drop p { margin: 0; color: var(--slate); }
+  .choose {
+    margin-top: 6px; font: 500 0.95rem var(--ui); color: #fff; background: var(--film);
+    border: 0; border-radius: 4px; padding: 10px 16px; cursor: pointer;
+  }
+  .choose:hover { background: #3A2E24; }
+  :focus-visible { outline: 3px solid var(--edge); outline-offset: 2px; }
+  input[type=file] { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+
+  /* ---------- upload list ---------- */
+  .uploads { list-style: none; margin: 16px 0 0; padding: 0; display: grid; gap: 6px; }
+  .uploads li { display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: baseline;
+    padding: 8px 12px; background: rgba(255,255,255,0.6); border-left: 3px solid var(--line); }
+  .uploads li.saved { border-left-color: #3F7D5A; }
+  .uploads li.waiting { border-left-color: var(--edge); }
+  .uploads li.failed { border-left-color: var(--pencil); }
+  .uploads .fname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .uploads .state { color: var(--slate); font-size: 0.9rem; text-align: right; }
+  .uploads li.failed .state { color: var(--pencil); }
+
+  /* ---------- contact sheet ---------- */
+  .sheet-head { display: flex; align-items: baseline; justify-content: space-between; margin: 44px 0 12px; gap: 12px; }
+  h2 { font: 700 1.3rem var(--ui); margin: 0; }
+  .count { color: var(--slate); font-size: 0.95rem; }
+  .strip {
+    background: var(--film); border-radius: 3px; padding: 22px 14px;
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 14px;
+    /* sprocket holes along both edges */
+    background-image:
+      radial-gradient(circle, var(--table) 0 3px, transparent 3.5px),
+      radial-gradient(circle, var(--table) 0 3px, transparent 3.5px);
+    background-size: 18px 22px, 18px 22px;
+    background-position: 0 -4px, 0 calc(100% + 4px);
+    background-repeat: repeat-x;
+  }
+  .frame { margin: 0; color: var(--edge); }
+  .frame a { display: block; aspect-ratio: 1; background: #120D09; overflow: hidden; border-radius: 2px; }
+  .frame img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .frame figcaption { display: flex; justify-content: space-between; gap: 8px; margin-top: 6px;
+    font: 600 0.78rem/1.2 var(--edge-font); }
+  .frame .file { color: #B8A994; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .empty { grid-column: 1 / -1; color: #B8A994; padding: 28px 8px; text-align: center; font-size: 0.95rem; }
+
+  .notice { margin-top: 18px; padding: 10px 14px; border-left: 3px solid var(--pencil);
+    background: rgba(180,50,42,0.06); display: none; }
+  .notice.show { display: block; }
+
+  @media (max-width: 600px) {
+    .wrap { padding: 22px 16px 48px; }
+    h1 { font-size: 1.9rem; }
+    .machines { gap: 6px; }
+    .machine { min-width: 64px; }
+    .strip { grid-template-columns: repeat(2, 1fr); padding: 20px 10px; }
+  }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>Shared album</h1>
+      <p class="sub" id="sub">Every photo is kept on all three machines.</p>
+    </div>
+    <div class="machines" id="machines" aria-label="Machines in the cluster"></div>
+  </header>
+
+  <div class="notice" id="notice" role="status"></div>
+
+  <section class="drop" id="drop" aria-label="Upload photos">
+    <strong>Drop photos here</strong>
+    <p id="limit">JPEG, PNG or WebP, up to 3 MB each.</p>
+    <label class="choose" for="files" tabindex="0">Choose photos</label>
+    <input type="file" id="files" accept="image/*" multiple>
+  </section>
+  <ul class="uploads" id="uploads" aria-live="polite"></ul>
+
+  <div class="sheet-head">
+    <h2>Contact sheet</h2>
+    <span class="count" id="count"></span>
+  </div>
+  <div class="strip" id="strip"><p class="empty">No photos yet. Upload one to start the roll.</p></div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let status = null;            // last /api/status from this node
+let shown = "";               // signature of the rendered gallery, to avoid redrawing
+
+// ---------- ids ----------
+// crypto.randomUUID() only exists on HTTPS or localhost, and this page runs over plain HTTP
+// on the LAN, so build a v4 UUID from getRandomValues, which works everywhere.
+function uuid4() {
+  const b = crypto.getRandomValues(new Uint8Array(16));
+  b[6] = (b[6] & 0x0f) | 0x40; b[8] = (b[8] & 0x3f) | 0x80;
+  const h = [...b].map((x) => x.toString(16).padStart(2, "0")).join("");
+  return `${h.slice(0,8)}-${h.slice(8,12)}-${h.slice(12,16)}-${h.slice(16,20)}-${h.slice(20)}`;
+}
+
+// ---------- cluster status ----------
+async function refreshStatus() {
+  try {
+    const r = await fetch("/api/status", { cache: "no-store" });
+    status = await r.json();
+    $("notice").classList.remove("show");
+  } catch {
+    status = null;
+    showNotice("This machine isn't answering. Open the album from another machine's address.");
+  }
+  drawMachines();
+  return status;
+}
+
+function drawMachines() {
+  const box = $("machines");
+  if (!status) { box.innerHTML = ""; return; }
+  box.innerHTML = "";
+  for (const n of [...status.nodes].sort((a, b) => a.id - b.id)) {
+    const isLeader = n.id === status.leader;
+    const el = document.createElement("div");
+    el.className = "machine" + (isLeader ? " leader" : "") + (n.alive ? "" : " down");
+    el.innerHTML = `
+      <svg class="ring" viewBox="0 0 100 80" preserveAspectRatio="none" aria-hidden="true">
+        <path d="M50 4 C82 3 97 20 95 42 C93 66 70 77 47 76 C20 75 4 60 5 38 C6 17 24 6 56 7"
+              fill="none" stroke="#B4322A" stroke-width="3" stroke-linecap="round"/>
+      </svg>
+      <svg width="30" height="26" viewBox="0 0 30 26" aria-hidden="true">
+        <rect x="1" y="1" width="28" height="18" rx="2" fill="none" stroke="#1E2428" stroke-width="2"/>
+        <path d="M10 25h10M15 19v6" stroke="#1E2428" stroke-width="2"/>
+      </svg>
+      <div class="name"></div><div class="role"></div>`;
+    el.querySelector(".name").textContent = `Machine ${n.id}` + (n.self ? " (this one)" : "");
+    el.querySelector(".role").textContent = !n.alive ? "not responding" : isLeader ? "receives uploads" : "keeps a copy";
+    box.appendChild(el);
+  }
+  $("sub").textContent = status.leader == null
+    ? "Choosing which machine receives uploads…"
+    : "Every photo is kept on all three machines.";
+}
+
+function showNotice(text) { const n = $("notice"); n.textContent = text; n.classList.add("show"); }
+
+// The leader's address: this page's own origin if this machine leads, otherwise the leader's.
+async function leaderBase() {
+  for (let i = 0; i < 20; i++) {
+    const st = await refreshStatus();
+    if (st && st.leader != null) return st.is_leader ? "" : st.leader_url;
+    await sleep(1000);            // no leader yet: an election is running
+  }
+  throw new Error("No machine is receiving uploads right now.");
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// ---------- uploads ----------
+function addRow(file) {
+  const li = document.createElement("li");
+  li.innerHTML = `<span class="fname"></span><span class="state">Waiting</span>`;
+  li.querySelector(".fname").textContent = file.name;
+  $("uploads").prepend(li);
+  return (cls, text) => { li.className = cls; li.querySelector(".state").textContent = text; };
+}
+
+async function upload(file) {
+  const set = addRow(file);
+  const max = status?.max_photo_size ?? 3 * 1024 * 1024;
+  if (!file.type.startsWith("image/")) return set("failed", "Not an image");
+  if (file.size > max) return set("failed", `Larger than ${Math.round(max / 1048576)} MB`);
+
+  const uploadId = uuid4();       // made once: every retry reuses it, so nothing is stored twice
+  for (let attempt = 1; attempt <= 8; attempt++) {
+    try {
+      const base = await leaderBase();
+      set("waiting", attempt === 1 ? "Uploading…" : `Uploading again (try ${attempt})…`);
+      const r = await fetch(base + "/api/photos", {
+        method: "POST",
+        headers: { "X-Upload-Id": uploadId, "X-File-Name": encodeURIComponent(file.name),
+                   "Content-Type": "application/octet-stream" },
+        body: file,
+      });
+      if (r.status === 421) { await sleep(800); continue; }     // that machine stopped leading
+      if (!r.ok) {
+        const msg = (await r.json().catch(() => ({}))).detail;
+        return set("failed", typeof msg === "string" ? msg : `Upload refused (${r.status})`);
+      }
+      const res = await r.json();
+      const copies = res.confirmed_by.length + 1;
+      if (res.saved) set("saved", `Saved on ${copies} machine${copies > 1 ? "s" : ""}`);
+      else set("waiting", `Saved on ${copies}; ${res.missing.length} still copying`);
+      refreshGallery();
+      return;
+    } catch {
+      set("waiting", "Leader not answering, finding the new one…");   // failover: retry
+      await sleep(1500);
+    }
+  }
+  set("failed", "Couldn't reach a machine that accepts uploads. Try again.");
+}
+
+async function uploadAll(files) {
+  for (const f of files) await upload(f);   // one at a time keeps the order on the roll
+}
+
+// ---------- gallery ----------
+async function refreshGallery() {
+  let list;
+  try { list = await (await fetch("/api/photos", { cache: "no-store" })).json(); }
+  catch { return; }
+  const sig = list.map((p) => p.image_id).join(",");
+  if (sig === shown) return;
+  shown = sig;
+  $("count").textContent = list.length ? `${list.length} photo${list.length > 1 ? "s" : ""}` : "";
+  const strip = $("strip");
+  strip.innerHTML = "";
+  if (!list.length) {
+    strip.innerHTML = `<p class="empty">No photos yet. Upload one to start the roll.</p>`;
+    return;
+  }
+  for (const p of list) {
+    const fig = document.createElement("figure");
+    fig.className = "frame";
+    fig.innerHTML = `<a target="_blank" rel="noopener"><img loading="lazy" alt=""></a>
+      <figcaption><span class="no"></span><span class="file"></span></figcaption>
+`;
+    const url = `/api/photos/${encodeURIComponent(p.image_id)}`;
+    fig.querySelector("a").href = url;
+    fig.querySelector("img").src = url;
+    fig.querySelector("img").alt = p.file_name;
+    fig.querySelector(".no").textContent = `${p.seq}`;
+    fig.querySelector(".file").textContent = p.file_name;
+    fig.title = `Frame ${p.seq}, leadership period ${p.epoch}`;
+    strip.appendChild(fig);
+  }
+}
+
+// ---------- wiring ----------
+$("files").addEventListener("change", (e) => { uploadAll([...e.target.files]); e.target.value = ""; });
+document.querySelector(".choose").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" || e.key === " ") { e.preventDefault(); $("files").click(); }
+});
+const drop = $("drop");
+["dragenter", "dragover"].forEach((t) => drop.addEventListener(t, (e) => { e.preventDefault(); drop.classList.add("over"); }));
+["dragleave", "drop"].forEach((t) => drop.addEventListener(t, (e) => { e.preventDefault(); drop.classList.remove("over"); }));
+drop.addEventListener("drop", (e) => uploadAll([...e.dataTransfer.files]));
+
+refreshStatus().then(refreshGallery);
+setInterval(refreshStatus, 2000);
+setInterval(refreshGallery, 3000);
+</script>
+</body>
+</html>

@@ -22,6 +22,7 @@ class Message(BaseModel):
     image_id: str | None = None
     file_name: str | None = None
     size: int = 0
+    upload_id: str | None = None        # client-made id: a retry after a failover is recognised
     data: bytes | None = None
 
 def encode(msg: Message) -> bytes:

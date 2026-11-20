@@ -1,5 +1,5 @@
 import argparse, asyncio, logging, time, json, random
-from ds1 import state as s, discovery, peer_link, election, monitor, replication as r, store as st
+from ds1 import state as s, discovery, peer_link, election, monitor, replication as r, store as st, web
 from ds1.config import JSON_DIR, BIN_DIR, EPOCH_DIR
 
 METADATA_FILE = JSON_DIR / "metadata.json"
@@ -77,7 +77,8 @@ def load() -> None:
 
 async def main(log):
     await asyncio.gather(peer_link.peer_link(log), discovery.discovery(log),
-                         monitor.watch_peers(log), elect(log), periodic_sync(log))
+                         monitor.watch_peers(log), elect(log), periodic_sync(log),
+                         web.serve(log))
 
 
 if __name__ == "__main__":
