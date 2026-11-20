@@ -36,6 +36,7 @@ async def handler(log, reader, writer):
             # ---------- failure detection and election ----------
             if msg.type == "HEARTBEAT":
                 s.Heartbeats.last_beat[msg.sender] = time.monotonic()
+                election._adopt_epoch(msg, log)          # learn a higher epoch from any heartbeat
             elif msg.type == "ELECTION":
                 election.on_election(msg, log)
             elif msg.type == "OK":
