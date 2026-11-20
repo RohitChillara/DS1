@@ -106,6 +106,10 @@
     .wrap { padding: 22px 16px 48px; }
     h1 { font-size: 1.9rem; }
     .leader-box { text-align: left; }
+    .nodes table { font-size: 0.9rem; }
+    .nodes th, .nodes td { padding-right: 10px; }
+    .choose { width: 100%; text-align: center; padding: 14px 16px; }   /* big thumb target */
+    .drop { padding: 22px 18px; }
     .strip { grid-template-columns: repeat(2, 1fr); padding: 20px 10px; }
   }
   @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
@@ -132,8 +136,8 @@
   <div class="notice" id="notice" role="status"></div>
 
   <section class="drop" id="drop" aria-label="Upload photos">
-    <strong>Drop photos here</strong>
-    <p id="limit">JPEG, PNG or WebP, up to 3 MB each.</p>
+    <strong id="drop-title">Drop photos here</strong>
+    <p id="limit">Large photos are made smaller before upload.</p>
     <label class="choose" for="files" tabindex="0">Choose photos</label>
     <input type="file" id="files" accept="image/*" multiple>
   </section>
@@ -246,11 +250,34 @@ function addRow(file) {
   return (cls, text) => { li.className = cls; li.querySelector(".state").textContent = text; };
 }
 
+// Re-encode as JPEG, largest side at most 2560 px, lowering quality until it fits under max.
+async function shrink(file, max) {
+  const img = await createImageBitmap(file, { imageOrientation: "from-image" });   // keeps phone rotation
+  let side = 2560;
+  for (let quality = 0.85; ; quality -= 0.1) {
+    const scale = Math.min(1, side / Math.max(img.width, img.height));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(img.width * scale); canvas.height = Math.round(img.height * scale);
+    canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise((r) => canvas.toBlob(r, "image/jpeg", quality));
+    if (blob && blob.size <= max) {
+      return new File([blob], file.name.replace(/\.[^.]+$/, "") + ".jpg", { type: "image/jpeg" });
+    }
+    if (quality < 0.5) { side = Math.round(side * 0.75); quality = 0.95; }   // then shrink the pixels too
+    if (side < 600) throw new Error("can't shrink");
+  }
+}
+
 async function upload(file) {
   const set = addRow(file);
   const max = status?.max_photo_size ?? 3 * 1024 * 1024;
-  if (!file.type.startsWith("image/")) return set("failed", "Not an image");
-  if (file.size > max) return set("failed", `Larger than ${Math.round(max / 1048576)} MB`);
+  if (file.type && !file.type.startsWith("image/")) return set("failed", "Not an image");
+  if (file.size > max) {
+    // Phone cameras take 4–12 MB photos. Shrink them in the browser instead of refusing them.
+    set("waiting", "Making it smaller…");
+    try { file = await shrink(file, max); }
+    catch { return set("failed", `Larger than ${Math.round(max / 1048576)} MB and couldn't be resized`); }
+  }
 
   const uploadId = uuid4();       // made once: every retry reuses it, so nothing is stored twice
   for (let attempt = 1; attempt <= 8; attempt++) {
@@ -328,6 +355,11 @@ const drop = $("drop");
 ["dragleave", "drop"].forEach((t) => drop.addEventListener(t, (e) => { e.preventDefault(); drop.classList.remove("over"); }));
 drop.addEventListener("drop", (e) => uploadAll([...e.dataTransfer.files]));
 
+// Touch screens can't drag files in, so say what they can do.
+if (matchMedia("(pointer: coarse)").matches) {
+  $("drop-title").textContent = "Add photos";
+  $("limit").textContent = "Pick from your gallery or take one with the camera.";
+}
 refreshStatus().then(refreshGallery);
 setInterval(refreshStatus, 2000);
 setInterval(refreshGallery, 3000);
