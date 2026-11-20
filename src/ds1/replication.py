@@ -106,7 +106,7 @@ async def collect_data(msg: m.Message, log):
     req_event.set()                       # arrival answers the REQUEST; the disk write doesn't count
     try:
         async with store_lock:
-            await asyncio.to_thread(st.save_photo, msg, msg.data)
+            await asyncio.to_thread(st.save_photo, msg, log)
     except Exception as e:
         log.error(f"Storing {(msg.epoch, msg.seq)} failed: {e!r}")
         return                            # no DATA_ACK: the leader retries this photo

@@ -2,7 +2,7 @@ from __future__ import annotations
 import asyncio
 import time
 from ds1 import messages as m, state as s
-from ds1 import peer_link as p, election as el
+from ds1 import peer_link as p, election as el, store as st
 
 BEAT_EVERY = 1.0      # seconds between heartbeats
 DEAD_AFTER = 3.0      # seconds without a heartbeat before a peer is presumed dead
@@ -14,7 +14,8 @@ CHECK_EVERY = 0.5
 async def heartbeats(peer_id: int, log):
     """One task per peer, started by discovery. Sender handles (re)connecting."""
     while True:
-        msg = m.Message(type="HEARTBEAT", sender=s.MyDetails.node_id, leader=s.Members.leader)
+
+        msg = m.Message(type="HEARTBEAT", sender=s.MyDetails.node_id, leader=s.Members.leader,epoch=st.get_epoch())
         await p.sender(peer_id, msg, log)
         await asyncio.sleep(BEAT_EVERY)
 

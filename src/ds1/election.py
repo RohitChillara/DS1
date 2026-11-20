@@ -38,7 +38,8 @@ def _adopt_epoch(msg: m.Message, log):
 
 def _claim(log):
     """Become leader. No await in here, so nothing can interrupt it halfway."""
-    st.set_epoch(st.get_epoch() + 1)                 # NEW: saved before it is announced
+    if s.Members.leader != s.MyDetails.node_id:
+        st.set_epoch(st.get_epoch() + 1)
     s.Members.leader = s.MyDetails.node_id
     announce = m.Message(type="COORDINATOR", sender=s.MyDetails.node_id,
                          leader=s.MyDetails.node_id, epoch=st.get_epoch())
