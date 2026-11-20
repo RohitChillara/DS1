@@ -111,12 +111,34 @@ def _check_permissions(log) -> None:
                         "Start the node from an administrator terminal.")
 
 
+def _windows_adapter_problem() -> str | None:
+    """Windows only. Adding an address to an adapter that gets its IP from the router (DHCP)
+    makes Windows switch the adapter to manual settings and drop its normal address and
+    gateway, which cuts the machine off the network. So refuse unless the adapter has a
+    fixed (static) IP. Also catch a wrong adapter name before netsh does."""
+    ok, out = _run(["netsh", "interface", "ipv4", "show", "config", f"name={iface}"])
+    if not ok or "DHCP enabled" not in out:
+        return (f"no adapter named {iface!r}; check the name with "
+                f"'netsh interface show interface'")
+    for line in out.splitlines():
+        if "DHCP enabled" in line and "Yes" in line:
+            return (f"adapter {iface!r} gets its IP automatically (DHCP). Adding the floating IP "
+                    f"would replace its settings and disconnect this machine. Give it a fixed IP "
+                    f"first: netsh interface ipv4 set address \"{iface}\" static <ip> <mask> <gateway>")
+    return None
+
+
 async def floating_ip(log):
     if iface is None:
         log.info("Floating IP off (start with --iface <adapter> to turn it on)")
         return
     log.info(f"Floating IP {ip} on adapter {iface!r} ({sys.platform})")
     _check_permissions(log)
+    if sys.platform == "win32":
+        problem = await asyncio.to_thread(_windows_adapter_problem)
+        if problem:
+            log.error(f"Floating IP off: {problem}")
+            return                                   # the node keeps running without it
     await asyncio.to_thread(release_now, log)        # left over from a crash?
 
     held = False                                     # what we last logged, to log changes only
